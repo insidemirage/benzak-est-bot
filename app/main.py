@@ -3,6 +3,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -240,7 +241,7 @@ def create_bot() -> Bot:
     )
 
 
-def get_proxy_url() -> str | None:
+def get_proxy_url() -> Optional[str]:
     return settings.all_proxy or None
 
 
@@ -251,11 +252,11 @@ async def ask_for_radius(message: Message) -> None:
     )
 
 
-def get_required_radius(user_id: int) -> float | None:
+def get_required_radius(user_id: int) -> Optional[float]:
     return user_radius_km.get(user_id)
 
 
-def parse_radius(text: str) -> float | None:
+def parse_radius(text: str) -> Optional[float]:
     try:
         radius_km = float(text.replace("км", "").strip().replace(",", "."))
     except ValueError:

@@ -4,6 +4,7 @@ import json
 import math
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 from app.geo import Coordinates
 from app.stations import Station
@@ -138,7 +139,7 @@ def find_cached_stations(
     max_age_seconds: int,
     max_distance_km: float,
     now: float,
-) -> list[Station] | None:
+) -> Optional[list[Station]]:
     init_db(database_path)
     min_checked_at = now - max_age_seconds
 

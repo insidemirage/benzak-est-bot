@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 
 AVAILABLE_STATUS = "available"
@@ -18,7 +18,7 @@ class Station:
     address: str
     latitude: float
     longitude: float
-    yandex_org_id: str | None
+    yandex_org_id: Optional[str]
     available_fuel_types: tuple[str, ...]
     maybe_available_fuel_types: tuple[str, ...]
 
