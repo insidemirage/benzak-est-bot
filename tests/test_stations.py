@@ -1,6 +1,12 @@
 import unittest
 
-from app.stations import Station, format_stations_message, format_stations_messages, parse_stations_response
+from app.stations import (
+    Station,
+    filter_stations_by_fuel_types,
+    format_stations_message,
+    format_stations_messages,
+    parse_stations_response,
+)
 
 
 class StationsTest(unittest.TestCase):
@@ -114,6 +120,64 @@ class StationsTest(unittest.TestCase):
         self.assertTrue(all(len(message) <= 1000 for message in messages))
         self.assertIn("Автозаправка Тестовая АЗС 0", messages[0])
         self.assertIn("Автозаправка Тестовая АЗС 119", messages[-1])
+
+    def test_filters_stations_by_selected_fuel_types(self) -> None:
+        station_92 = Station(
+            id="station-92",
+            name="АЗС 92",
+            address="Тестовый адрес",
+            latitude=10.0,
+            longitude=20.0,
+            yandex_org_id=None,
+            available_fuel_types=("92",),
+            maybe_available_fuel_types=(),
+        )
+        station_95 = Station(
+            id="station-95",
+            name="АЗС 95",
+            address="Тестовый адрес",
+            latitude=10.0,
+            longitude=20.0,
+            yandex_org_id=None,
+            available_fuel_types=("95",),
+            maybe_available_fuel_types=(),
+        )
+        station_100 = Station(
+            id="station-100",
+            name="АЗС 100",
+            address="Тестовый адрес",
+            latitude=10.0,
+            longitude=20.0,
+            yandex_org_id=None,
+            available_fuel_types=("100",),
+            maybe_available_fuel_types=(),
+        )
+
+        filtered = filter_stations_by_fuel_types(
+            [station_92, station_95, station_100],
+            selected_fuel_types={"95", "100"},
+        )
+
+        self.assertEqual([station_95, station_100], filtered)
+
+    def test_filter_keeps_only_selected_fuel_types_in_station_message(self) -> None:
+        station = Station(
+            id="station-mixed",
+            name="АЗС Микс",
+            address="Тестовый адрес",
+            latitude=10.0,
+            longitude=20.0,
+            yandex_org_id=None,
+            available_fuel_types=("92", "95", "100"),
+            maybe_available_fuel_types=(),
+        )
+
+        filtered = filter_stations_by_fuel_types([station], selected_fuel_types={"95"})
+        message = format_stations_message(filtered)
+
+        self.assertIn("Есть бензин: 95", message)
+        self.assertNotIn("92", message)
+        self.assertNotIn("100", message)
 
 
 if __name__ == "__main__":

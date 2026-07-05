@@ -74,6 +74,38 @@ def format_stations_message(stations: list[Station]) -> str:
     return "\n\n".join(format_stations_messages(stations))
 
 
+def filter_stations_by_fuel_types(
+    stations: list[Station],
+    selected_fuel_types: set[str],
+) -> list[Station]:
+    filtered: list[Station] = []
+    for station in stations:
+        available = tuple(
+            fuel_type for fuel_type in station.available_fuel_types if fuel_type in selected_fuel_types
+        )
+        maybe_available = tuple(
+            fuel_type for fuel_type in station.maybe_available_fuel_types if fuel_type in selected_fuel_types
+        )
+
+        if not available and not maybe_available:
+            continue
+
+        filtered.append(
+            Station(
+                id=station.id,
+                name=station.name,
+                address=station.address,
+                latitude=station.latitude,
+                longitude=station.longitude,
+                yandex_org_id=station.yandex_org_id,
+                available_fuel_types=available,
+                maybe_available_fuel_types=maybe_available,
+            )
+        )
+
+    return filtered
+
+
 def format_stations_messages(
     stations: list[Station],
     max_message_length: int = TELEGRAM_MESSAGE_LIMIT,

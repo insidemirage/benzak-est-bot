@@ -19,20 +19,29 @@ from aiohttp import ClientSession
 from app.config import settings
 from app.geo import DEFAULT_RADIUS_KM, Coordinates, build_stations_url
 from app.messages import format_checking_message
-from app.stations import Station, format_stations_messages, parse_stations_response
+from app.stations import (
+    Station,
+    filter_stations_by_fuel_types,
+    format_stations_messages,
+    parse_stations_response,
+)
 from app.storage import find_cached_stations, init_db, save_check_result
 from app.throttle import get_retry_after
 
 
 router = Router()
 CHANGE_LOCATION_TEXT = "Изменить координаты"
+CHANGE_FUEL_FILTER_TEXT = "Изменить бензин"
 CHANGE_RADIUS_TEXT = "Изменить радиус"
 CHECK_STATIONS_TEXT = "Проверить заправки"
+FUEL_FILTER_DONE_TEXT = "Готово"
 SHARE_LOCATION_TEXT = "Поделиться местоположением"
 CACHE_DISTANCE_KM = 1.0
+FUEL_TYPES = ("92", "95", "100")
 MAX_RADIUS_KM = 30
 RADIUS_OPTIONS_KM = (5, 10, 15, 30)
 user_coordinates: dict[int, Coordinates] = {}
+user_fuel_types: dict[int, set[str]] = {}
 user_radius_km: dict[int, float] = {}
 last_check_at: dict[int, float] = {}
 
@@ -51,6 +60,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=CHECK_STATIONS_TEXT)],
+            [KeyboardButton(text=CHANGE_FUEL_FILTER_TEXT)],
             [KeyboardButton(text=CHANGE_RADIUS_TEXT)],
             [KeyboardButton(text=CHANGE_LOCATION_TEXT)],
         ],
@@ -69,6 +79,19 @@ def radius_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def fuel_filter_keyboard(selected_fuel_types: set[str]) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=format_fuel_filter_button(fuel_type, selected_fuel_types))
+                for fuel_type in FUEL_TYPES
+            ],
+            [KeyboardButton(text=FUEL_FILTER_DONE_TEXT)],
+        ],
+        resize_keyboard=True,
+    )
+
+
 @router.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
     await ask_for_radius(message)
@@ -84,6 +107,14 @@ async def change_radius_handler(message: Message) -> None:
     await message.answer("Выберите радиус поиска до 30 км:", reply_markup=radius_keyboard())
 
 
+@router.message(F.text == CHANGE_FUEL_FILTER_TEXT)
+async def change_fuel_filter_handler(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    await ask_for_fuel_filter(message)
+
+
 @router.message(F.text.in_({f"{radius_km} км" for radius_km in RADIUS_OPTIONS_KM}))
 async def radius_handler(message: Message) -> None:
     if message.from_user is None or message.text is None:
@@ -95,12 +126,61 @@ async def radius_handler(message: Message) -> None:
         return
 
     user_radius_km[message.from_user.id] = radius_km
+    if message.from_user.id not in user_fuel_types:
+        await message.answer(f"Радиус поиска изменён: {radius_km:g} км.")
+        await ask_for_fuel_filter(message)
+        return
+
     if message.from_user.id not in user_coordinates:
         await message.answer(f"Радиус поиска изменён: {radius_km:g} км.")
         await ask_for_location(message)
         return
 
     await message.answer(f"Радиус поиска изменён: {radius_km:g} км.", reply_markup=main_keyboard())
+
+
+@router.message(F.text.in_(set(FUEL_TYPES) | {f"{fuel_type} ✓" for fuel_type in FUEL_TYPES}))
+async def fuel_filter_toggle_handler(message: Message) -> None:
+    if message.from_user is None or message.text is None:
+        return
+
+    fuel_type = parse_fuel_type(message.text)
+    if fuel_type is None:
+        await ask_for_fuel_filter(message)
+        return
+
+    selected_fuel_types = set(user_fuel_types.get(message.from_user.id, set()))
+    if fuel_type in selected_fuel_types:
+        selected_fuel_types.remove(fuel_type)
+    else:
+        selected_fuel_types.add(fuel_type)
+
+    user_fuel_types[message.from_user.id] = selected_fuel_types
+    await message.answer(
+        format_fuel_filter_message(selected_fuel_types),
+        reply_markup=fuel_filter_keyboard(selected_fuel_types),
+    )
+
+
+@router.message(F.text == FUEL_FILTER_DONE_TEXT)
+async def fuel_filter_done_handler(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    selected_fuel_types = get_required_fuel_types(message.from_user.id)
+    if not selected_fuel_types:
+        await message.answer("Выберите хотя бы один тип бензина.", reply_markup=fuel_filter_keyboard(set()))
+        return
+
+    if message.from_user.id not in user_coordinates:
+        await message.answer(f"Фильтр сохранён: {format_fuel_types_for_text(selected_fuel_types)}.")
+        await ask_for_location(message)
+        return
+
+    await message.answer(
+        f"Фильтр сохранён: {format_fuel_types_for_text(selected_fuel_types)}.",
+        reply_markup=main_keyboard(),
+    )
 
 
 @router.message(F.text == CHECK_STATIONS_TEXT)
@@ -112,6 +192,11 @@ async def check_stations_handler(message: Message) -> None:
     radius_km = get_required_radius(message.from_user.id)
     if radius_km is None:
         await ask_for_radius(message)
+        return
+
+    selected_fuel_types = get_required_fuel_types(message.from_user.id)
+    if not selected_fuel_types:
+        await ask_for_fuel_filter(message)
         return
 
     coordinates = user_coordinates.get(message.from_user.id)
@@ -139,6 +224,7 @@ async def check_stations_handler(message: Message) -> None:
         message,
         coordinates,
         radius_km=radius_km,
+        selected_fuel_types=selected_fuel_types,
         prefix=f"Проверяю заправки в радиусе {radius_km:g} км...",
     )
 
@@ -154,6 +240,11 @@ async def location_handler(message: Message) -> None:
         await ask_for_radius(message)
         return
 
+    selected_fuel_types = get_required_fuel_types(message.from_user.id)
+    if not selected_fuel_types:
+        await ask_for_fuel_filter(message)
+        return
+
     coordinates = Coordinates(
         latitude=message.location.latitude,
         longitude=message.location.longitude,
@@ -165,6 +256,7 @@ async def location_handler(message: Message) -> None:
         message,
         coordinates,
         radius_km=radius_km,
+        selected_fuel_types=selected_fuel_types,
         prefix=f"Координаты получил. Проверяю заправки в радиусе {radius_km:g} км...",
     )
 
@@ -173,6 +265,7 @@ async def check_stations(
     message: Message,
     coordinates: Coordinates,
     radius_km: float,
+    selected_fuel_types: set[str],
     prefix: str,
 ) -> None:
     stations_url = build_stations_url(coordinates, radius_km=radius_km)
@@ -191,7 +284,10 @@ async def check_stations(
         now=now,
     )
     if cached_stations is not None:
-        await answer_stations(loading_message, cached_stations)
+        await answer_stations(
+            loading_message,
+            filter_stations_by_fuel_types(cached_stations, selected_fuel_types),
+        )
         return
 
     try:
@@ -213,7 +309,7 @@ async def check_stations(
         )
         return
 
-    await answer_stations(loading_message, stations)
+    await answer_stations(loading_message, filter_stations_by_fuel_types(stations, selected_fuel_types))
 
 
 async def answer_stations(message: Message, stations: list[Station]) -> None:
@@ -254,6 +350,44 @@ async def ask_for_radius(message: Message) -> None:
 
 def get_required_radius(user_id: int) -> Optional[float]:
     return user_radius_km.get(user_id)
+
+
+async def ask_for_fuel_filter(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    selected_fuel_types = user_fuel_types.get(message.from_user.id, set())
+    await message.answer(
+        format_fuel_filter_message(selected_fuel_types),
+        reply_markup=fuel_filter_keyboard(selected_fuel_types),
+    )
+
+
+def get_required_fuel_types(user_id: int) -> set[str]:
+    return set(user_fuel_types.get(user_id, set()))
+
+
+def parse_fuel_type(text: str) -> Optional[str]:
+    fuel_type = text.replace("✓", "").strip()
+    if fuel_type not in FUEL_TYPES:
+        return None
+
+    return fuel_type
+
+
+def format_fuel_filter_button(fuel_type: str, selected_fuel_types: set[str]) -> str:
+    return f"{fuel_type} ✓" if fuel_type in selected_fuel_types else fuel_type
+
+
+def format_fuel_filter_message(selected_fuel_types: set[str]) -> str:
+    if not selected_fuel_types:
+        return "Выберите нужные типы бензина. Можно отметить несколько вариантов."
+
+    return f"Выбрано: {format_fuel_types_for_text(selected_fuel_types)}. Можно изменить выбор или нажать «Готово»."
+
+
+def format_fuel_types_for_text(fuel_types: set[str]) -> str:
+    return ", ".join(sorted(fuel_types, key=FUEL_TYPES.index))
 
 
 def parse_radius(text: str) -> Optional[float]:
