@@ -25,6 +25,5 @@ class MainTest(unittest.TestCase):
 
         self.assertEqual(11, retry_after)
 
-
 if __name__ == "__main__":
     unittest.main()

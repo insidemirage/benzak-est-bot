@@ -19,6 +19,8 @@ from aiohttp import ClientSession
 from app.config import settings
 from app.geo import DEFAULT_RADIUS_KM, Coordinates, build_stations_url
 from app.messages import format_checking_message
+from app.messages import format_fuel_filter_message as format_fuel_filter_message_text
+from app.messages import format_fuel_types_for_text as format_fuel_types_for_text_message
 from app.stations import (
     Station,
     filter_stations_by_fuel_types,
@@ -379,15 +381,12 @@ def format_fuel_filter_button(fuel_type: str, selected_fuel_types: set[str]) -> 
     return f"{fuel_type} ✓" if fuel_type in selected_fuel_types else fuel_type
 
 
-def format_fuel_filter_message(selected_fuel_types: set[str]) -> str:
-    if not selected_fuel_types:
-        return "Выберите нужные типы бензина. Можно отметить несколько вариантов."
-
-    return f"Выбрано: {format_fuel_types_for_text(selected_fuel_types)}. Можно изменить выбор или нажать «Готово»."
-
-
 def format_fuel_types_for_text(fuel_types: set[str]) -> str:
-    return ", ".join(sorted(fuel_types, key=FUEL_TYPES.index))
+    return format_fuel_types_for_text_message(fuel_types, FUEL_TYPES)
+
+
+def format_fuel_filter_message(selected_fuel_types: set[str]) -> str:
+    return format_fuel_filter_message_text(selected_fuel_types, FUEL_TYPES)
 
 
 def parse_radius(text: str) -> Optional[float]:
