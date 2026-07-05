@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.stations import Station
 from app.geo import Coordinates
-from app.storage import find_cached_stations, init_db, save_check_result, save_stations
+from app.storage import find_cached_stations, get_stats, init_db, record_user, save_check_result, save_stations
 
 
 class StorageTest(unittest.TestCase):
@@ -235,6 +235,42 @@ class StorageTest(unittest.TestCase):
             )
 
             self.assertEqual([station], cached_stations)
+
+    def test_get_stats_counts_users_and_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            database_path = str(Path(tmpdir) / "bot.sqlite3")
+
+            record_user(database_path, user_id=1)
+            record_user(database_path, user_id=2)
+            save_check_result(
+                database_path,
+                user_id=1,
+                coordinates=Coordinates(latitude=10.0, longitude=20.0),
+                radius_km=5,
+                stations=[],
+                checked_at=100.0,
+            )
+            save_check_result(
+                database_path,
+                user_id=1,
+                coordinates=Coordinates(latitude=10.0, longitude=20.0),
+                radius_km=5,
+                stations=[],
+                checked_at=110.0,
+            )
+            save_check_result(
+                database_path,
+                user_id=2,
+                coordinates=Coordinates(latitude=10.0, longitude=20.0),
+                radius_km=5,
+                stations=[],
+                checked_at=120.0,
+            )
+
+            stats = get_stats(database_path)
+
+            self.assertEqual(2, stats.users_count)
+            self.assertEqual(3, stats.checks_count)
 
 
 if __name__ == "__main__":

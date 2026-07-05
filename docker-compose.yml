@@ -11,6 +11,7 @@ services:
       CHECK_THROTTLE_SECONDS: ${CHECK_THROTTLE_SECONDS:-30}
       DEV_MODE: ${DEV_MODE:-false}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ADMIN_ID: ${ADMIN_ID:-}
     volumes:
       - ./data:/app/data
     networks:

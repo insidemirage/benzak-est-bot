@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -10,11 +11,26 @@ from app.geo import Coordinates
 from app.stations import Station
 
 
+@dataclass(frozen=True)
+class BotStats:
+    users_count: int
+    checks_count: int
+
+
 def init_db(database_path: str) -> None:
     path = Path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bot_users (
+                user_id INTEGER PRIMARY KEY,
+                first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS stations (
@@ -103,6 +119,31 @@ def save_stations(database_path: str, stations: list[Station]) -> None:
         )
 
 
+def record_user(database_path: str, user_id: int) -> None:
+    init_db(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO bot_users (user_id, first_seen_at, last_seen_at)
+            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_seen_at = CURRENT_TIMESTAMP
+            """,
+            (user_id,),
+        )
+
+
+def get_stats(database_path: str) -> BotStats:
+    init_db(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        users_count = connection.execute("SELECT COUNT(*) FROM bot_users").fetchone()[0]
+        checks_count = connection.execute("SELECT COUNT(*) FROM station_checks").fetchone()[0]
+
+    return BotStats(users_count=users_count, checks_count=checks_count)
+
+
 def save_check_result(
     database_path: str,
     user_id: int,
@@ -112,6 +153,7 @@ def save_check_result(
     checked_at: float,
 ) -> None:
     init_db(database_path)
+    record_user(database_path, user_id)
     save_stations(database_path, stations)
 
     with sqlite3.connect(database_path) as connection:

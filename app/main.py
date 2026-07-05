@@ -27,7 +27,7 @@ from app.stations import (
     format_stations_messages,
     parse_stations_response,
 )
-from app.storage import find_cached_stations, init_db, save_check_result
+from app.storage import find_cached_stations, get_stats, init_db, record_user, save_check_result
 from app.throttle import get_retry_after
 
 
@@ -36,6 +36,7 @@ CHANGE_LOCATION_TEXT = "Изменить координаты"
 CHANGE_FUEL_FILTER_TEXT = "Изменить бензин"
 CHANGE_RADIUS_TEXT = "Изменить радиус"
 CHECK_STATIONS_TEXT = "Проверить заправки"
+ADMIN_STATS_TEXT = "Статистика"
 FUEL_FILTER_DONE_TEXT = "Готово"
 SHARE_LOCATION_TEXT = "Поделиться местоположением"
 CACHE_DISTANCE_KM = 1.0
@@ -58,14 +59,18 @@ def location_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def main_keyboard() -> ReplyKeyboardMarkup:
+def main_keyboard(user_id: Optional[int] = None) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text=CHECK_STATIONS_TEXT)],
+        [KeyboardButton(text=CHANGE_FUEL_FILTER_TEXT)],
+        [KeyboardButton(text=CHANGE_RADIUS_TEXT)],
+        [KeyboardButton(text=CHANGE_LOCATION_TEXT)],
+    ]
+    if is_admin_user(user_id):
+        keyboard.append([KeyboardButton(text=ADMIN_STATS_TEXT)])
+
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=CHECK_STATIONS_TEXT)],
-            [KeyboardButton(text=CHANGE_FUEL_FILTER_TEXT)],
-            [KeyboardButton(text=CHANGE_RADIUS_TEXT)],
-            [KeyboardButton(text=CHANGE_LOCATION_TEXT)],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
     )
 
@@ -96,16 +101,19 @@ def fuel_filter_keyboard(selected_fuel_types: set[str]) -> ReplyKeyboardMarkup:
 
 @router.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
+    record_message_user(message)
     await ask_for_radius(message)
 
 
 @router.message(F.text == CHANGE_LOCATION_TEXT)
 async def change_location_handler(message: Message) -> None:
+    record_message_user(message)
     await ask_for_location(message)
 
 
 @router.message(F.text == CHANGE_RADIUS_TEXT)
 async def change_radius_handler(message: Message) -> None:
+    record_message_user(message)
     await message.answer("Выберите радиус поиска до 30 км:", reply_markup=radius_keyboard())
 
 
@@ -114,7 +122,23 @@ async def change_fuel_filter_handler(message: Message) -> None:
     if message.from_user is None:
         return
 
+    record_message_user(message)
     await ask_for_fuel_filter(message)
+
+
+@router.message(F.text == ADMIN_STATS_TEXT)
+async def admin_stats_handler(message: Message) -> None:
+    user_id = record_message_user(message)
+    if not is_admin_user(user_id):
+        return
+
+    stats = get_stats(settings.database_path)
+    await message.answer(
+        "Статистика бота\n\n"
+        f"Пользователей: {stats.users_count}\n"
+        f"Запросов всего: {stats.checks_count}",
+        reply_markup=main_keyboard(user_id),
+    )
 
 
 @router.message(F.text.in_({f"{radius_km} км" for radius_km in RADIUS_OPTIONS_KM}))
@@ -122,6 +146,7 @@ async def radius_handler(message: Message) -> None:
     if message.from_user is None or message.text is None:
         return
 
+    record_message_user(message)
     radius_km = parse_radius(message.text)
     if radius_km is None:
         await message.answer("Выберите радиус кнопкой ниже.", reply_markup=radius_keyboard())
@@ -138,7 +163,10 @@ async def radius_handler(message: Message) -> None:
         await ask_for_location(message)
         return
 
-    await message.answer(f"Радиус поиска изменён: {radius_km:g} км.", reply_markup=main_keyboard())
+    await message.answer(
+        f"Радиус поиска изменён: {radius_km:g} км.",
+        reply_markup=main_keyboard(message.from_user.id),
+    )
 
 
 @router.message(F.text.in_(set(FUEL_TYPES) | {f"{fuel_type} ✓" for fuel_type in FUEL_TYPES}))
@@ -146,6 +174,7 @@ async def fuel_filter_toggle_handler(message: Message) -> None:
     if message.from_user is None or message.text is None:
         return
 
+    record_message_user(message)
     fuel_type = parse_fuel_type(message.text)
     if fuel_type is None:
         await ask_for_fuel_filter(message)
@@ -169,6 +198,7 @@ async def fuel_filter_done_handler(message: Message) -> None:
     if message.from_user is None:
         return
 
+    record_message_user(message)
     selected_fuel_types = get_required_fuel_types(message.from_user.id)
     if not selected_fuel_types:
         await message.answer("Выберите хотя бы один тип бензина.", reply_markup=fuel_filter_keyboard(set()))
@@ -181,7 +211,7 @@ async def fuel_filter_done_handler(message: Message) -> None:
 
     await message.answer(
         f"Фильтр сохранён: {format_fuel_types_for_text(selected_fuel_types)}.",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(message.from_user.id),
     )
 
 
@@ -191,6 +221,7 @@ async def check_stations_handler(message: Message) -> None:
         await ask_for_radius(message)
         return
 
+    record_message_user(message)
     radius_km = get_required_radius(message.from_user.id)
     if radius_km is None:
         await ask_for_radius(message)
@@ -217,7 +248,7 @@ async def check_stations_handler(message: Message) -> None:
         await message.answer(
             f"Проверять заправки можно не чаще одного раза в {settings.check_throttle_seconds} сек. "
             f"Попробуйте ещё раз через {retry_after} сек.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard(message.from_user.id),
         )
         return
 
@@ -237,6 +268,7 @@ async def location_handler(message: Message) -> None:
         await ask_for_radius(message)
         return
 
+    record_message_user(message)
     radius_km = get_required_radius(message.from_user.id)
     if radius_km is None:
         await ask_for_radius(message)
@@ -273,7 +305,7 @@ async def check_stations(
     stations_url = build_stations_url(coordinates, radius_km=radius_km)
     loading_message = await message.answer(
         format_checking_message(prefix, stations_url, settings.dev_mode),
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
     )
     now = time.time()
 
@@ -289,6 +321,7 @@ async def check_stations(
         await answer_stations(
             loading_message,
             filter_stations_by_fuel_types(cached_stations, selected_fuel_types),
+            user_id=message.from_user.id if message.from_user else None,
         )
         return
 
@@ -307,17 +340,21 @@ async def check_stations(
         logging.exception("Failed to fetch stations")
         await loading_message.answer(
             "Не получилось проверить заправки прямо сейчас. Попробуйте ещё раз немного позже.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard(message.from_user.id if message.from_user else None),
         )
         return
 
-    await answer_stations(loading_message, filter_stations_by_fuel_types(stations, selected_fuel_types))
+    await answer_stations(
+        loading_message,
+        filter_stations_by_fuel_types(stations, selected_fuel_types),
+        user_id=message.from_user.id if message.from_user else None,
+    )
 
 
-async def answer_stations(message: Message, stations: list[Station]) -> None:
+async def answer_stations(message: Message, stations: list[Station], user_id: Optional[int] = None) -> None:
     station_messages = format_stations_messages(stations)
     for index, station_message in enumerate(station_messages):
-        reply_markup = main_keyboard() if index == len(station_messages) - 1 else None
+        reply_markup = main_keyboard(user_id) if index == len(station_messages) - 1 else None
         await message.answer(station_message, reply_markup=reply_markup)
 
 
@@ -341,6 +378,18 @@ def create_bot() -> Bot:
 
 def get_proxy_url() -> Optional[str]:
     return settings.all_proxy or None
+
+
+def is_admin_user(user_id: Optional[int]) -> bool:
+    return settings.admin_id is not None and user_id == settings.admin_id
+
+
+def record_message_user(message: Message) -> Optional[int]:
+    if message.from_user is None:
+        return None
+
+    record_user(settings.database_path, message.from_user.id)
+    return message.from_user.id
 
 
 async def ask_for_radius(message: Message) -> None:
