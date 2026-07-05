@@ -13,4 +13,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ./data:/app/data
+    networks:
+      - default
+      - vless-net
     restart: unless-stopped
+
+networks:
+  vless-net:
+    external: true
+    name: vless-net
