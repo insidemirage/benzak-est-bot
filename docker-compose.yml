@@ -1,0 +1,17 @@
+services:
+  bot:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      ALL_PROXY: ${ALL_PROXY}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,.local}
+      DATABASE_PATH: ${DATABASE_PATH:-data/bot.sqlite3}
+      CHECK_THROTTLE_SECONDS: ${CHECK_THROTTLE_SECONDS:-30}
+      DEV_MODE: ${DEV_MODE:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

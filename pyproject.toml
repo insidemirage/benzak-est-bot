@@ -1,0 +1,15 @@
+[project]
+name = "benzak-bot"
+version = "0.1.0"
+description = "Python Telegram bot"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram==3.13.1",
+    "aiohttp-socks==0.9.0",
+    "pydantic-settings==2.5.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
