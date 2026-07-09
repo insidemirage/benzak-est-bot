@@ -16,8 +16,23 @@ from aiogram.filters import CommandStart
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 from aiohttp import ClientSession
 
+from app.admin_updates import (
+    CANCEL_SEND_UPDATE_TEXT,
+    CONFIRM_SEND_UPDATE_TEXT,
+    SEND_UPDATE_TEXT,
+    format_update_preview,
+    format_update_result,
+    send_update_to_users,
+)
 from app.config import settings
 from app.geo import DEFAULT_RADIUS_KM, Coordinates, build_stations_url
+from app.location_text import (
+    LOCATION_REQUEST_TEXT,
+    NAVIGATOR_HELP_BUTTON_TEXT,
+    NAVIGATOR_HELP_TEXT,
+    SHARE_TELEGRAM_LOCATION_TEXT,
+    handle_text_location_message,
+)
 from app.messages import format_checking_message
 from app.messages import format_fuel_filter_message as format_fuel_filter_message_text
 from app.messages import format_fuel_types_for_text as format_fuel_types_for_text_message
@@ -27,7 +42,14 @@ from app.stations import (
     format_stations_messages,
     parse_stations_response,
 )
-from app.storage import find_cached_stations, get_stats, init_db, record_user, save_check_result
+from app.storage import (
+    find_cached_stations,
+    get_stats,
+    init_db,
+    list_user_ids,
+    record_user,
+    save_check_result,
+)
 from app.throttle import get_retry_after
 
 
@@ -38,7 +60,6 @@ CHANGE_RADIUS_TEXT = "Изменить радиус"
 CHECK_STATIONS_TEXT = "Проверить заправки"
 ADMIN_STATS_TEXT = "Статистика"
 FUEL_FILTER_DONE_TEXT = "Готово"
-SHARE_LOCATION_TEXT = "Поделиться местоположением"
 CACHE_DISTANCE_KM = 1.0
 FUEL_TYPES = ("92", "95", "100")
 MAX_RADIUS_KM = 30
@@ -52,7 +73,8 @@ last_check_at: dict[int, float] = {}
 def location_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=SHARE_LOCATION_TEXT, request_location=True)],
+            [KeyboardButton(text=SHARE_TELEGRAM_LOCATION_TEXT, request_location=True)],
+            [KeyboardButton(text=NAVIGATOR_HELP_BUTTON_TEXT)],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -68,10 +90,22 @@ def main_keyboard(user_id: Optional[int] = None) -> ReplyKeyboardMarkup:
     ]
     if is_admin_user(user_id):
         keyboard.append([KeyboardButton(text=ADMIN_STATS_TEXT)])
+        keyboard.append([KeyboardButton(text=SEND_UPDATE_TEXT)])
 
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
+    )
+
+
+def update_confirmation_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=CONFIRM_SEND_UPDATE_TEXT)],
+            [KeyboardButton(text=CANCEL_SEND_UPDATE_TEXT)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 
@@ -111,6 +145,12 @@ async def change_location_handler(message: Message) -> None:
     await ask_for_location(message)
 
 
+@router.message(F.text == NAVIGATOR_HELP_BUTTON_TEXT)
+async def navigator_help_handler(message: Message) -> None:
+    record_message_user(message)
+    await message.answer(NAVIGATOR_HELP_TEXT, reply_markup=location_keyboard())
+
+
 @router.message(F.text == CHANGE_RADIUS_TEXT)
 async def change_radius_handler(message: Message) -> None:
     record_message_user(message)
@@ -139,6 +179,39 @@ async def admin_stats_handler(message: Message) -> None:
         f"Запросов всего: {stats.checks_count}",
         reply_markup=main_keyboard(user_id),
     )
+
+
+@router.message(F.text == SEND_UPDATE_TEXT)
+async def admin_update_preview_handler(message: Message) -> None:
+    user_id = record_message_user(message)
+    if not is_admin_user(user_id):
+        return
+
+    user_ids = list_user_ids(settings.database_path)
+    await message.answer(
+        format_update_preview(users_count=len(user_ids)),
+        reply_markup=update_confirmation_keyboard(),
+    )
+
+
+@router.message(F.text == CONFIRM_SEND_UPDATE_TEXT)
+async def admin_update_confirm_handler(message: Message, bot: Bot) -> None:
+    user_id = record_message_user(message)
+    if not is_admin_user(user_id):
+        return
+
+    user_ids = list_user_ids(settings.database_path)
+    result = await send_update_to_users(bot, user_ids)
+    await message.answer(format_update_result(result), reply_markup=main_keyboard(user_id))
+
+
+@router.message(F.text == CANCEL_SEND_UPDATE_TEXT)
+async def admin_update_cancel_handler(message: Message) -> None:
+    user_id = record_message_user(message)
+    if not is_admin_user(user_id):
+        return
+
+    await message.answer("Отправка обновления отменена.", reply_markup=main_keyboard(user_id))
 
 
 @router.message(F.text.in_({f"{radius_km} км" for radius_km in RADIUS_OPTIONS_KM}))
@@ -295,6 +368,35 @@ async def location_handler(message: Message) -> None:
     )
 
 
+@router.message(F.text)
+async def shared_location_text_handler(message: Message) -> None:
+    if message.from_user is None:
+        await ask_for_radius(message)
+        return
+
+    record_message_user(message)
+    radius_km = get_required_radius(message.from_user.id)
+    if radius_km is None:
+        await ask_for_radius(message)
+        return
+
+    selected_fuel_types = get_required_fuel_types(message.from_user.id)
+    if not selected_fuel_types:
+        await ask_for_fuel_filter(message)
+        return
+
+    await handle_text_location_message(
+        message,
+        user_id=message.from_user.id,
+        radius_km=radius_km,
+        selected_fuel_types=selected_fuel_types,
+        save_coordinates=save_user_coordinates,
+        mark_check_started=mark_check_started,
+        check_stations=check_stations,
+        location_keyboard=location_keyboard,
+    )
+
+
 async def check_stations(
     message: Message,
     coordinates: Coordinates,
@@ -359,11 +461,7 @@ async def answer_stations(message: Message, stations: list[Station], user_id: Op
 
 
 async def ask_for_location(message: Message) -> None:
-    await message.answer(
-        "Поделитесь своим местоположением, чтобы я мог проверить заправки рядом с вами.\n\n"
-        "Нажмите кнопку ниже и отправьте геолокацию. Потом координаты можно будет изменить.",
-        reply_markup=location_keyboard(),
-    )
+    await message.answer(LOCATION_REQUEST_TEXT, reply_markup=location_keyboard())
 
 
 def create_bot() -> Bot:
@@ -390,6 +488,14 @@ def record_message_user(message: Message) -> Optional[int]:
 
     record_user(settings.database_path, message.from_user.id)
     return message.from_user.id
+
+
+def save_user_coordinates(user_id: int, coordinates: Coordinates) -> None:
+    user_coordinates[user_id] = coordinates
+
+
+def mark_check_started(user_id: int) -> None:
+    last_check_at[user_id] = time.monotonic()
 
 
 async def ask_for_radius(message: Message) -> None:

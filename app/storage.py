@@ -144,6 +144,15 @@ def get_stats(database_path: str) -> BotStats:
     return BotStats(users_count=users_count, checks_count=checks_count)
 
 
+def list_user_ids(database_path: str) -> list[int]:
+    init_db(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute("SELECT user_id FROM bot_users ORDER BY user_id").fetchall()
+
+    return [row[0] for row in rows]
+
+
 def save_check_result(
     database_path: str,
     user_id: int,
