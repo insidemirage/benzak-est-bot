@@ -18,6 +18,7 @@ from aiohttp import ClientSession
 
 from app.config import settings
 from app.geo import DEFAULT_RADIUS_KM, Coordinates, build_stations_url
+from app.location_text import handle_text_location_message
 from app.messages import format_checking_message
 from app.messages import format_fuel_filter_message as format_fuel_filter_message_text
 from app.messages import format_fuel_types_for_text as format_fuel_types_for_text_message
@@ -295,6 +296,35 @@ async def location_handler(message: Message) -> None:
     )
 
 
+@router.message(F.text)
+async def shared_location_text_handler(message: Message) -> None:
+    if message.from_user is None:
+        await ask_for_radius(message)
+        return
+
+    record_message_user(message)
+    radius_km = get_required_radius(message.from_user.id)
+    if radius_km is None:
+        await ask_for_radius(message)
+        return
+
+    selected_fuel_types = get_required_fuel_types(message.from_user.id)
+    if not selected_fuel_types:
+        await ask_for_fuel_filter(message)
+        return
+
+    await handle_text_location_message(
+        message,
+        user_id=message.from_user.id,
+        radius_km=radius_km,
+        selected_fuel_types=selected_fuel_types,
+        save_coordinates=save_user_coordinates,
+        mark_check_started=mark_check_started,
+        check_stations=check_stations,
+        location_keyboard=location_keyboard,
+    )
+
+
 async def check_stations(
     message: Message,
     coordinates: Coordinates,
@@ -361,7 +391,10 @@ async def answer_stations(message: Message, stations: list[Station], user_id: Op
 async def ask_for_location(message: Message) -> None:
     await message.answer(
         "Поделитесь своим местоположением, чтобы я мог проверить заправки рядом с вами.\n\n"
-        "Нажмите кнопку ниже и отправьте геолокацию. Потом координаты можно будет изменить.",
+        "Нажмите кнопку ниже и отправьте геолокацию. Если Telegram пишет ошибку, "
+        "поделитесь ближайшим к вам местом через Яндекс Навигатор или 2ГИС: "
+        "откройте место рядом с вами, нажмите «Поделиться» и отправьте сообщение сюда.\n\n"
+        "Потом координаты можно будет изменить.",
         reply_markup=location_keyboard(),
     )
 
@@ -390,6 +423,14 @@ def record_message_user(message: Message) -> Optional[int]:
 
     record_user(settings.database_path, message.from_user.id)
     return message.from_user.id
+
+
+def save_user_coordinates(user_id: int, coordinates: Coordinates) -> None:
+    user_coordinates[user_id] = coordinates
+
+
+def mark_check_started(user_id: int) -> None:
+    last_check_at[user_id] = time.monotonic()
 
 
 async def ask_for_radius(message: Message) -> None:
